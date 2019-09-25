@@ -1,49 +1,105 @@
 (function () {
-  const img = document.getElementById('image');
+  const video = document.getElementById('webcam')
   const status = document.getElementById('status')
-  const btn = document.getElementById('btn')
+  const btn1 = document.getElementById('btn1')
+  const btn2 = document.getElementById('btn2')
+  const btnTestPredictions = document.getElementById('btn-test-predictions')
+  let knn
+  let mobilenetModule
+  let testPrediction = false
+  let timer
+  let training = true
+  let recordSamples = false
+  let trainingPress
 
-  async function predictImage () {
-    status.innerHTML = 'Model loading...'
-    const model = await mobilenet.load()
 
-    status.innerHTML = 'Model is loaded!'
+  loadClassifierAndModel()
+  initializeWebcam()
+  setupButtonEvents()
 
-    const predictions = await model.classify(img)
-    status.innerHTML = predictions[0].className
+  function initializeWebcam () {
+    navigator.mediaDevices.getUserMedia({video: true, audio: false})
+      .then(stream => {
+        video.srcObject = stream
+        video.width = 400
+        video.height = 300
+      })
   }
 
+  async function loadClassifierAndModel () {
+    knn = window.knnClassifier.create()
+    mobilenetModule = await window.mobilenet.load()
+    console.log('model loaded')
+    start()
+  }
 
-  function loadImage (url) {
-    return new Promise((resolve, reject) => {
-      var xhr = new XMLHttpRequest()
-      xhr.onload = function() {
-          var reader = new FileReader()
-          reader.onloadend = function() {
-              resolve(reader.result)
-          }
-          reader.readAsDataURL(xhr.response)
+  function start () {
+    timer = window.requestAnimationFrame(animate)
+  }
+
+  async function animate () {
+    if (recordSamples) {
+      const image = window.tf.browser.fromPixels(video)
+
+      let logits
+      const infer = () => mobilenetModule.infer(image, 'conv_preds')
+
+      if (trainingPress !== -1) {
+        logits = infer()
+
+        knn.addExample(logits, trainingPress)
       }
-      xhr.open('GET', url)
-      xhr.responseType = 'blob'
-      xhr.send()
+
+      const numClasses = knn.getNumClasses()
+
+      if (testPrediction) {
+        training = false
+        if (numClasses > 0) {
+          logits = infer()
+
+          const res = await knn.predictClass(logits, 10)
+
+          if (res.confidences[0] > 0.6) {
+            status.innerHTML = `👆 I'm ${res.confidences[0] * 100} sure!`
+          } else if (res.confidences[1] > 0.6) {
+            status.innerHTML = `✌️ I'm ${res.confidences[1] * 100} sure!`
+          } else {
+            status.innerHTML = 'I don\'t know'
+          }
+        }
+      }
+
+      // if (training) {
+      //   const exampleCount = knn.getClassExampleCount()
+
+      //   console.log('exampleCount 1:', exampleCount[0] || 0)
+      //   console.log('exampleCount 2:', exampleCount[1] || 0)
+      // }
+
+      image.dispose()
+      if (logits) {
+        logits.dispose()
+      }
+    }
+    timer = window.requestAnimationFrame(animate)
+  }
+
+  function setupButtonEvents () {
+    btn1.onmousedown = () => {
+      trainingPress = 0
+      recordSamples = true
+    }
+    btn1.onmouseup = () => (trainingPress = -1)
+
+    btn2.onmousedown = () => {
+      trainingPress = 1
+      recordSamples = true
+    }
+    btn2.onmouseup = () => (trainingPress = -1)
+
+    btnTestPredictions.addEventListener('click', () => {
+      testPrediction = true
     })
   }
 
-  async function predictNewImage () {
-    img.style.display = 'none'
-    status.innerHTML = 'Image loading...'
-    const base64 = await loadImage('https://picsum.photos/500/300')
-
-    img.setAttribute('src', base64)
-    img.style.display = 'inline'
-
-    predictImage()
-  }
-
-  btn.addEventListener('click', () => {
-    predictNewImage()
-  })
-
-  predictNewImage()
 })()
